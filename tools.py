@@ -16,13 +16,6 @@ if sys.platform.startswith("win"):
 
 load_dotenv()
 
-from typing import TypedDict, Annotated
-from langgraph.graph.message import add_messages
-from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
-from langgraph.prebuilt import ToolNode
-from langgraph.graph import START, StateGraph
-from langgraph.prebuilt import tools_condition
-from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.tools import Tool
 from huggingface_hub import list_models
@@ -76,50 +69,18 @@ hub_stats_tool = Tool(
     description="Fetches the most downloaded model from a specific author on the Hugging Face Hub."
 )
 
-# --- Agent Integration ---
-
-HUGGINGFACEHUB_API_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-
-# Generate the chat interface, including the tools
-llm = HuggingFaceEndpoint(
-    repo_id="Qwen/Qwen2.5-Coder-32B-Instruct",
-    huggingfacehub_api_token=HUGGINGFACEHUB_API_TOKEN,
-)
-
-chat = ChatHuggingFace(llm=llm, verbose=True)
-tools = [search_tool, weather_info_tool, hub_stats_tool]
-chat_with_tools = chat.bind_tools(tools)
-
-# Generate the AgentState and Agent graph
-class AgentState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-
-def assistant(state: AgentState):
-    return {
-        "messages": [chat_with_tools.invoke(state["messages"])],
-    }
-
-## The graph
-builder = StateGraph(AgentState)
-
-# Define nodes: these do the work
-builder.add_node("assistant", assistant)
-builder.add_node("tools", ToolNode(tools))
-
-# Define edges: these determine how the control flow moves
-builder.add_edge(START, "assistant")
-builder.add_conditional_edges(
-    "assistant",
-    # If the latest message requires a tool, route to tools
-    # Otherwise, provide a direct response
-    tools_condition,
-)
-builder.add_edge("tools", "assistant")
-alfred = builder.compile()
-
 if __name__ == "__main__":
-    messages = [HumanMessage(content="Who is Facebook and what's their most popular model?")]
-    response = alfred.invoke({"messages": messages})
+    # Test DuckDuckGoSearchRun
+    print("Testing DuckDuckGoSearchRun:")
+    print(search_tool.invoke("Who's the current President of France?"))
+    print("-" * 50)
 
-    print("🎩 Alfred's Response:")
-    print(response['messages'][-1].content)
+    # Test Weather Tool
+    print("Testing get_weather_info:")
+    print(weather_info_tool.invoke("Paris"))
+    print("-" * 50)
+
+    # Test Hub Stats Tool
+    print("Testing get_hub_stats:")
+    print(hub_stats_tool.invoke("facebook"))
+    print("-" * 50)
