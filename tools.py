@@ -1,86 +1,125 @@
-import random
+import os
+import sys
 import warnings
 import logging
-import sys
-from smolagents import Tool, DuckDuckGoSearchTool
-from huggingface_hub import list_models
+import random
+from dotenv import load_dotenv
 
-# Suppress Hugging Face warnings
-warnings.filterwarnings("ignore", category=UserWarning)
+# Suppress Deprecation Warnings and user/HF warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # Reconfigure stdout to support UTF-8 (emojis/special characters on Windows)
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-# 1. Search Tool
-search_tool = DuckDuckGoSearchTool()
+load_dotenv()
 
-# 2. Weather Info Tool
-class WeatherInfoTool(Tool):
-    name = "weather_info"
-    description = "Fetches dummy weather information for a given location."
-    inputs = {
-        "location": {
-            "type": "string",
-            "description": "The location to get weather information for."
-        }
-    }
-    output_type = "string"
+from typing import TypedDict, Annotated
+from langgraph.graph.message import add_messages
+from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import START, StateGraph
+from langgraph.prebuilt import tools_condition
+from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_core.tools import Tool
+from huggingface_hub import list_models
 
-    def forward(self, location: str):
-        weather_conditions = [
-            {"condition": "Rainy", "temp_c": 15},
-            {"condition": "Clear", "temp_c": 25},
-            {"condition": "Windy", "temp_c": 20}
-        ]
-        data = random.choice(weather_conditions)
-        return f"Weather in {location}: {data['condition']}, {data['temp_c']}°C"
+# 1. Give Your Agent Access to the Web
+search_tool = DuckDuckGoSearchRun()
 
-weather_info_tool = WeatherInfoTool()
+# 2. Creating a Custom Tool for Weather Information to Schedule the Fireworks
+def get_weather_info(location: str) -> str:
+    """Fetches dummy weather information for a given location."""
+    # Dummy weather data
+    weather_conditions = [
+        {"condition": "Rainy", "temp_c": 15},
+        {"condition": "Clear", "temp_c": 25},
+        {"condition": "Windy", "temp_c": 20}
+    ]
+    # Randomly select a weather condition
+    data = random.choice(weather_conditions)
+    return f"Weather in {location}: {data['condition']}, {data['temp_c']}°C"
 
-# 3. Hub Stats Tool
-class HubStatsTool(Tool):
-    name = "hub_stats"
-    description = "Fetches the most downloaded model from a specific author on the Hugging Face Hub."
-    inputs = {
-        "author": {
-            "type": "string",
-            "description": "The username of the model author/organization to find models from."
-        }
-    }
-    output_type = "string"
+# Initialize the tool
+weather_info_tool = Tool(
+    name="get_weather_info",
+    func=get_weather_info,
+    description="Fetches dummy weather information for a given location."
+)
 
-    def forward(self, author: str):
-        try:
-            models = list(list_models(author=author, sort="downloads", limit=1))
-            if models:
-                model = models[0]
-                downloads = getattr(model, "downloads", None)
-                if downloads is not None:
-                    return f"The most downloaded model by {author} is {model.id} with {downloads:,} downloads."
-                else:
-                    return f"The most downloaded model by {author} is {model.id}."
+# 3. Creating a Hub Stats Tool for Influential AI Builders
+def get_hub_stats(author: str) -> str:
+    """Fetches the most downloaded model from a specific author on the Hugging Face Hub."""
+    try:
+        # List models from the specified author, sorted by downloads (no direction parameter in latest API)
+        models = list(list_models(author=author, sort="downloads", limit=1))
+
+        if models:
+            model = models[0]
+            downloads = getattr(model, "downloads", None)
+            if downloads is not None:
+                return f"The most downloaded model by {author} is {model.id} with {downloads:,} downloads."
             else:
-                return f"No models found for author {author}."
-        except Exception as e:
-            return f"Error fetching models for {author}: {str(e)}"
+                return f"The most downloaded model by {author} is {model.id}."
+        else:
+            return f"No models found for author {author}."
+    except Exception as e:
+        return f"Error fetching models for {author}: {str(e)}"
 
-hub_stats_tool = HubStatsTool()
+# Initialize the tool
+hub_stats_tool = Tool(
+    name="get_hub_stats",
+    func=get_hub_stats,
+    description="Fetches the most downloaded model from a specific author on the Hugging Face Hub."
+)
+
+# --- Agent Integration ---
+
+HUGGINGFACEHUB_API_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+
+# Generate the chat interface, including the tools
+llm = HuggingFaceEndpoint(
+    repo_id="Qwen/Qwen2.5-Coder-32B-Instruct",
+    huggingfacehub_api_token=HUGGINGFACEHUB_API_TOKEN,
+)
+
+chat = ChatHuggingFace(llm=llm, verbose=True)
+tools = [search_tool, weather_info_tool, hub_stats_tool]
+chat_with_tools = chat.bind_tools(tools)
+
+# Generate the AgentState and Agent graph
+class AgentState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+
+def assistant(state: AgentState):
+    return {
+        "messages": [chat_with_tools.invoke(state["messages"])],
+    }
+
+## The graph
+builder = StateGraph(AgentState)
+
+# Define nodes: these do the work
+builder.add_node("assistant", assistant)
+builder.add_node("tools", ToolNode(tools))
+
+# Define edges: these determine how the control flow moves
+builder.add_edge(START, "assistant")
+builder.add_conditional_edges(
+    "assistant",
+    # If the latest message requires a tool, route to tools
+    # Otherwise, provide a direct response
+    tools_condition,
+)
+builder.add_edge("tools", "assistant")
+alfred = builder.compile()
 
 if __name__ == "__main__":
-    # Test DuckDuckGoSearchTool
-    print("Testing DuckDuckGoSearchTool:")
-    print(search_tool("Who's the current President of France?"))
-    print("-" * 50)
+    messages = [HumanMessage(content="Who is Facebook and what's their most popular model?")]
+    response = alfred.invoke({"messages": messages})
 
-    # Test WeatherInfoTool
-    print("Testing WeatherInfoTool:")
-    print(weather_info_tool("Paris"))
-    print("-" * 50)
-
-    # Test HubStatsTool
-    print("Testing HubStatsTool:")
-    print(hub_stats_tool("facebook"))
-    print("-" * 50)
+    print("🎩 Alfred's Response:")
+    print(response['messages'][-1].content)
