@@ -1,23 +1,18 @@
-import os
-import sys
+import random
 import warnings
 import logging
-import random
-from dotenv import load_dotenv
+import sys
+from smolagents import Tool, DuckDuckGoSearchTool
+from huggingface_hub import list_models
 
-# Suppress warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+# Suppress Hugging Face warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # Reconfigure stdout to support UTF-8 (emojis/special characters on Windows)
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8")
-
-load_dotenv()
-
-from smolagents import Tool, CodeAgent, InferenceClientModel, DuckDuckGoSearchTool
-from huggingface_hub import list_models
 
 # 1. Search Tool
 search_tool = DuckDuckGoSearchTool()
@@ -74,21 +69,18 @@ class HubStatsTool(Tool):
 
 hub_stats_tool = HubStatsTool()
 
-# --- Agent Integration ---
-
-# Align HUGGINGFACEHUB_API_TOKEN with HF_TOKEN for smolagents
-if os.getenv("HUGGINGFACEHUB_API_TOKEN") and not os.getenv("HF_TOKEN"):
-    os.environ["HF_TOKEN"] = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-
-model = InferenceClientModel()
-
-alfred = CodeAgent(
-    tools=[search_tool, weather_info_tool, hub_stats_tool], 
-    model=model
-)
-
 if __name__ == "__main__":
-    print("Running Alfred Agent...")
-    response = alfred.run("What is Facebook and what's their most popular model?")
-    print("🎩 Alfred's Response:")
-    print(response)
+    # Test DuckDuckGoSearchTool
+    print("Testing DuckDuckGoSearchTool:")
+    print(search_tool("Who's the current President of France?"))
+    print("-" * 50)
+
+    # Test WeatherInfoTool
+    print("Testing WeatherInfoTool:")
+    print(weather_info_tool("Paris"))
+    print("-" * 50)
+
+    # Test HubStatsTool
+    print("Testing HubStatsTool:")
+    print(hub_stats_tool("facebook"))
+    print("-" * 50)
